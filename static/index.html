@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Offline chat</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f3efe6;
+      --ink: #1c1915;
+      --muted: #5e584f;
+      --line: #ddd4c4;
+      --panel: #fffdf8;
+      --user: #0f6e56;
+      --user-ink: #f4fbf8;
+      --danger: #8c2f2f;
+      --danger-bg: #fdecec;
+      --ok: #0f6e56;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: var(--bg);
+      color: var(--ink);
+      font: 16px/1.5 "Segoe UI", system-ui, sans-serif;
+    }
+
+    body {
+      display: flex;
+      justify-content: center;
+    }
+
+    .app {
+      width: min(760px, 100%);
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      padding: 20px 16px 16px;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: flex-start;
+      margin-bottom: 14px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 1.35rem;
+      font-weight: 650;
+      letter-spacing: -0.02em;
+    }
+
+    .sub {
+      margin: 2px 0 0;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    .status {
+      margin: 0;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 0.82rem;
+      white-space: nowrap;
+    }
+
+    .status.ok { color: var(--ok); }
+    .status.bad { color: var(--danger); border-color: #f0c8c8; background: var(--danger-bg); }
+
+    #messages {
+      flex: 1;
+      overflow: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 4px 2px 12px;
+    }
+
+    .empty {
+      margin: auto;
+      max-width: 36ch;
+      text-align: center;
+      color: var(--muted);
+    }
+
+    article {
+      max-width: 85%;
+      padding: 10px 12px;
+      border-radius: 14px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    article p { margin: 0; }
+
+    article.user {
+      align-self: flex-end;
+      background: var(--user);
+      color: var(--user-ink);
+      border-bottom-right-radius: 4px;
+    }
+
+    article.assistant {
+      align-self: flex-start;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-bottom-left-radius: 4px;
+    }
+
+    .banner {
+      display: none;
+      margin: 0 0 10px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: var(--danger-bg);
+      color: var(--danger);
+    }
+
+    .banner.show { display: block; }
+
+    form {
+      display: flex;
+      gap: 8px;
+      align-items: flex-end;
+      padding: 10px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+    }
+
+    textarea {
+      flex: 1;
+      resize: none;
+      border: 0;
+      outline: none;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      min-height: 44px;
+      max-height: 160px;
+      padding: 8px;
+    }
+
+    button {
+      border: 0;
+      border-radius: 10px;
+      background: var(--user);
+      color: var(--user-ink);
+      font: inherit;
+      font-weight: 600;
+      padding: 10px 14px;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      opacity: 0.45;
+      cursor: default;
+    }
+
+    footer {
+      margin: 8px 2px 0;
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header>
+      <div>
+        <h1>Offline chat</h1>
+        <p class="sub">llama3.2:3b on this computer</p>
+      </div>
+      <p id="status" class="status" role="status">Checking Ollama…</p>
+    </header>
+    <p id="banner" class="banner" role="alert"></p>
+    <section id="messages" aria-live="polite">
+      <p class="empty">Ask a question. Answers come from the local model, not the internet.</p>
+    </section>
+    <form id="composer">
+      <label class="visually-hidden" for="prompt" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);">Message</label>
+      <textarea id="prompt" rows="1" placeholder="Message llama3.2:3b" autofocus></textarea>
+      <button id="send" type="submit">Send</button>
+    </form>
+    <footer>Runs on this computer. No internet.</footer>
+  </main>
+  <script>
+    const messagesEl = document.getElementById("messages");
+    const statusEl = document.getElementById("status");
+    const bannerEl = document.getElementById("banner");
+    const form = document.getElementById("composer");
+    const promptEl = document.getElementById("prompt");
+    const sendBtn = document.getElementById("send");
+    const history = [];
+    let busy = false;
+    let ready = false;
+
+    function setStatus(text, kind) {
+      statusEl.textContent = text;
+      statusEl.className = "status" + (kind ? " " + kind : "");
+    }
+
+    function setBanner(text) {
+      bannerEl.textContent = text || "";
+      bannerEl.classList.toggle("show", Boolean(text));
+    }
+
+    function setBusy(value) {
+      busy = value;
+      sendBtn.disabled = value || !ready;
+      promptEl.disabled = value || !ready;
+    }
+
+    async function checkHealth() {
+      try {
+        const response = await fetch("/api/health");
+        const data = await response.json();
+        if (data.ok) {
+          ready = true;
+          setStatus(data.model + " ready", "ok");
+          setBanner("");
+          setBusy(false);
+          return;
+        }
+        ready = false;
+        setStatus("Ollama unavailable", "bad");
+        setBanner(data.error || "Ollama is not ready.");
+        setBusy(false);
+      } catch (err) {
+        ready = false;
+        setStatus("Chat server unavailable", "bad");
+        setBanner("The local chat server did not respond.");
+        setBusy(false);
+      }
+    }
+
+    function clearEmpty() {
+      const empty = messagesEl.querySelector(".empty");
+      if (empty) empty.remove();
+    }
+
+    function addMessage(role, text) {
+      clearEmpty();
+      const article = document.createElement("article");
+      article.className = role;
+      const body = document.createElement("p");
+      body.textContent = text;
+      article.appendChild(body);
+      messagesEl.appendChild(article);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+      return body;
+    }
+
+    async function readEvents(response, onEvent) {
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const step = await reader.read();
+        if (step.done) break;
+        buffer += decoder.decode(step.value, { stream: true });
+        let splitAt = buffer.indexOf("\n\n");
+        while (splitAt >= 0) {
+          const block = buffer.slice(0, splitAt);
+          buffer = buffer.slice(splitAt + 2);
+          const line = block.split("\n").find((item) => item.startsWith("data: "));
+          if (line) onEvent(JSON.parse(line.slice(6)));
+          splitAt = buffer.indexOf("\n\n");
+        }
+      }
+    }
+
+    async function sendMessage(text) {
+      history.push({ role: "user", content: text });
+      addMessage("user", text);
+      const body = addMessage("assistant", "");
+      setBusy(true);
+      setBanner("");
+      let reply = "";
+      try {
+        const response = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ messages: history }),
+        });
+        if (!response.ok) {
+          let message = "The local model could not answer.";
+          try {
+            const data = await response.json();
+            if (data.error) message = data.error;
+          } catch (err) {
+            /* keep the fallback message */
+          }
+          throw new Error(message);
+        }
+        await readEvents(response, (event) => {
+          if (event.error) throw new Error(event.error);
+          if (event.content) {
+            reply += event.content;
+            body.textContent = reply;
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+          }
+        });
+        if (!reply) throw new Error("The model returned an empty reply.");
+        history.push({ role: "assistant", content: reply });
+      } catch (err) {
+        body.textContent = reply || "No reply.";
+        if (history.length && history[history.length - 1].role === "user") {
+          history.pop();
+        }
+        setBanner(err.message || "The reply failed.");
+        if (!reply) body.parentElement.remove();
+      } finally {
+        setBusy(false);
+        promptEl.focus();
+      }
+    }
+
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const text = promptEl.value.trim();
+      if (!text || busy || !ready) return;
+      promptEl.value = "";
+      promptEl.style.height = "auto";
+      sendMessage(text);
+    });
+
+    promptEl.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        form.requestSubmit();
+      }
+    });
+
+    promptEl.addEventListener("input", () => {
+      promptEl.style.height = "auto";
+      promptEl.style.height = Math.min(promptEl.scrollHeight, 160) + "px";
+    });
+
+    checkHealth();
+  </script>
+</body>
+</html>
