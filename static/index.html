@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Offline chat</title>
+  <title>Chat</title>
   <style>
     :root {
       color-scheme: light;
@@ -117,6 +117,25 @@
       border-bottom-left-radius: 4px;
     }
 
+    article.assistant.online { border-color: #c5d4ea; }
+
+    .route {
+      margin: 0 0 4px;
+      color: var(--muted);
+      font-size: 0.75rem;
+    }
+
+    .route.online { color: #1d4e89; }
+
+    .sources {
+      margin: 8px 0 0;
+      padding: 0;
+      list-style: none;
+      font-size: 0.85rem;
+    }
+
+    .sources a { color: #1d4e89; }
+
     .banner {
       display: none;
       margin: 0 0 10px;
@@ -178,21 +197,21 @@
   <main class="app">
     <header>
       <div>
-        <h1>Offline chat</h1>
-        <p class="sub">llama3.2:3b on this computer</p>
+        <h1>Chat</h1>
+        <p class="sub">Local llama3.2:3b, or OpenAI when a question needs live data</p>
       </div>
       <p id="status" class="status" role="status">Checking Ollama…</p>
     </header>
     <p id="banner" class="banner" role="alert"></p>
     <section id="messages" aria-live="polite">
-      <p class="empty">Ask a question. Answers come from the local model, not the internet.</p>
+      <p class="empty">Ask a question. Everyday questions stay on this computer. News, weather, prices, and other current facts use OpenAI.</p>
     </section>
     <form id="composer">
       <label class="visually-hidden" for="prompt" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);">Message</label>
-      <textarea id="prompt" rows="1" placeholder="Message llama3.2:3b" autofocus></textarea>
+      <textarea id="prompt" rows="1" placeholder="Ask a question" autofocus></textarea>
       <button id="send" type="submit">Send</button>
     </form>
-    <footer>Runs on this computer. No internet.</footer>
+    <footer>Everyday questions stay on this computer. Questions that need current information are sent to OpenAI.</footer>
   </main>
   <script>
     const messagesEl = document.getElementById("messages");
@@ -227,7 +246,8 @@
         const data = await response.json();
         if (data.ok) {
           ready = true;
-          setStatus(data.model + " ready", "ok");
+          const openai = data.openai === "configured" ? "OpenAI ready" : "OpenAI key not set";
+          setStatus(data.model + " ready · " + openai, "ok");
           setBanner("");
           setBusy(false);
           return;
@@ -253,12 +273,46 @@
       clearEmpty();
       const article = document.createElement("article");
       article.className = role;
+      let routeEl = null;
+      let sourcesEl = null;
+      if (role === "assistant") {
+        routeEl = document.createElement("p");
+        routeEl.className = "route";
+        routeEl.textContent = "Choosing a model…";
+        article.appendChild(routeEl);
+      }
       const body = document.createElement("p");
       body.textContent = text;
       article.appendChild(body);
+      if (role === "assistant") {
+        sourcesEl = document.createElement("ul");
+        sourcesEl.className = "sources";
+        article.appendChild(sourcesEl);
+      }
       messagesEl.appendChild(article);
       messagesEl.scrollTop = messagesEl.scrollHeight;
-      return body;
+      return { article, body, routeEl, sourcesEl };
+    }
+
+    function showSources(sourcesEl, sources) {
+      sourcesEl.replaceChildren();
+      for (const source of sources || []) {
+        if (!source) continue;
+        const item = document.createElement("li");
+        if (/^https?:\/\//i.test(source.url || "")) {
+          const link = document.createElement("a");
+          link.href = source.url;
+          link.target = "_blank";
+          link.rel = "noopener noreferrer";
+          link.textContent = source.title || source.url;
+          item.appendChild(link);
+        } else if (source.title) {
+          item.textContent = source.title;
+        } else {
+          continue;
+        }
+        sourcesEl.appendChild(item);
+      }
     }
 
     async function readEvents(response, onEvent) {
@@ -283,10 +337,11 @@
     async function sendMessage(text) {
       history.push({ role: "user", content: text });
       addMessage("user", text);
-      const body = addMessage("assistant", "");
+      const message = addMessage("assistant", "");
       setBusy(true);
       setBanner("");
       let reply = "";
+      let routeLabel = "";
       try {
         const response = await fetch("/api/chat", {
           method: "POST",
@@ -294,32 +349,45 @@
           body: JSON.stringify({ messages: history }),
         });
         if (!response.ok) {
-          let message = "The local model could not answer.";
+          let messageText = "The model could not answer.";
           try {
             const data = await response.json();
-            if (data.error) message = data.error;
+            if (data.error) messageText = data.error;
           } catch (err) {
             /* keep the fallback message */
           }
-          throw new Error(message);
+          throw new Error(messageText);
         }
         await readEvents(response, (event) => {
           if (event.error) throw new Error(event.error);
+          if (event.status === "choosing") message.routeEl.textContent = "Choosing a model…";
+          if (event.route) {
+            const online = event.route === "online";
+            message.article.classList.toggle("online", online);
+            message.routeEl.classList.toggle("online", online);
+            routeLabel = online ? "Online · " + event.model : "Offline · " + event.model;
+            message.routeEl.textContent = routeLabel;
+          }
+          if (event.status === "searching") {
+            message.routeEl.textContent = "Online · searching the web…";
+          }
           if (event.content) {
+            if (routeLabel) message.routeEl.textContent = routeLabel;
             reply += event.content;
-            body.textContent = reply;
+            message.body.textContent = reply;
             messagesEl.scrollTop = messagesEl.scrollHeight;
           }
+          if (event.sources) showSources(message.sourcesEl, event.sources);
         });
         if (!reply) throw new Error("The model returned an empty reply.");
         history.push({ role: "assistant", content: reply });
       } catch (err) {
-        body.textContent = reply || "No reply.";
+        message.body.textContent = reply || "No reply.";
         if (history.length && history[history.length - 1].role === "user") {
           history.pop();
         }
         setBanner(err.message || "The reply failed.");
-        if (!reply) body.parentElement.remove();
+        if (!reply) message.article.remove();
       } finally {
         setBusy(false);
         promptEl.focus();

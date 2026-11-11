@@ -1,8 +1,13 @@
-# Offline chat (llama3.2:3b)
+# Chat (local llama3.2:3b, OpenAI when needed)
 
-Local chat page that talks only to Ollama on this computer. It uses the Python standard library, so there is nothing to install with pip. Requests stay on `127.0.0.1`.
+The page runs on this computer and uses the Python standard library, so there is nothing to install with pip.
 
-The model is `llama3.2:3b`, which is already installed.
+The local model decides each question:
+
+- Explanations, code, math, and other stable questions stay on `llama3.2:3b`.
+- News, weather, prices, scores, and other current facts go to OpenAI (`gpt-5.4-mini`), which searches the web.
+
+Each reply is labeled Offline or Online. Online replies include source links. An online question, plus the recent messages needed to understand it, is sent to OpenAI. The API key stays on the server.
 
 ## Start
 
@@ -28,3 +33,22 @@ ollama list
 ```
 
 You should see `llama3.2:3b`.
+
+## OpenAI for live questions
+
+Set your key in the same terminal before starting the server. Do not put the key in the page or in source code.
+
+PowerShell:
+
+```
+$env:OPENAI_API_KEY = "your-key"
+python chat_server.py
+```
+
+To use a different OpenAI model:
+
+```
+$env:OPENAI_MODEL = "gpt-5.4-mini"
+```
+
+You can also put `OPENAI_API_KEY` and `OPENAI_MODEL` in a `.env` file in this folder. That file is ignored by git. Restart the server after changing it.
